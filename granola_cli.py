@@ -284,20 +284,10 @@ def run_fetch(args: argparse.Namespace, mode: OutputMode) -> int:
                 db.record_fetch_failure(run_id)
                 logger.warning("failed to fetch %s: %s", note_id, exc.message)
 
-        current_run = db.fetch_run(run_id)
-        if current_run is None:
-            raise CommandError(
-                "database_error",
-                f"Fetch run {run_id} disappeared before finalization",
-                exit_code=1,
-                retryable=False,
-            )
-
         run_row = db.finish_fetch_run(
             run_id,
-            status="partial_failure" if current_run["notes_failed"] else "success",
             rebuild_fts=True,
-            update_watermark=current_run["notes_failed"] == 0,
+            update_watermark=True,
         )
         watermark = db.get_sync_state("last_watermark")
 
@@ -322,12 +312,15 @@ def run_fetch(args: argparse.Namespace, mode: OutputMode) -> int:
             )
         return 6 if run_row["notes_failed"] else 0
     except Exception as exc:
-        db.finish_fetch_run(
-            run_id,
-            status="failed",
-            error=str(exc),
-            rebuild_fts=True,
-        )
+        try:
+            db.finish_fetch_run(
+                run_id,
+                status="failed",
+                error=str(exc),
+                rebuild_fts=True,
+            )
+        except Exception:
+            logger.exception("failed to finalize fetch run after original error")
         raise
     finally:
         db.close()

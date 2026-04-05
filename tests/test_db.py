@@ -89,6 +89,23 @@ def test_fetch_run_round_trip() -> None:
     assert db.get_sync_state("last_watermark") == "2026-01-01T00:00:00Z"
 
 
+def test_finish_fetch_run_derives_partial_failure_status() -> None:
+    db = Database(":memory:")
+    db.initialize()
+    run_id = db.start_fetch_run(overwrite_from=None, dry_run=False)
+    db.set_fetch_discovered(run_id, 2)
+    db.record_fetch_success(
+        run_id,
+        sample_note(updated_at="2026-01-01T00:00:00Z"),
+    )
+    db.record_fetch_failure(run_id)
+
+    row = db.finish_fetch_run(run_id, rebuild_fts=True, update_watermark=True)
+
+    assert row["status"] == "partial_failure"
+    assert db.get_sync_state("last_watermark") is None
+
+
 def test_request_log_round_trip() -> None:
     db = Database(":memory:")
     db.initialize()

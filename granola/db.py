@@ -167,7 +167,7 @@ class Database:
         self,
         run_id: str,
         *,
-        status: str,
+        status: str | None = None,
         error: str | None = None,
         rebuild_fts: bool = False,
         update_watermark: bool = False,
@@ -183,7 +183,15 @@ class Database:
             if current is None:
                 raise ValueError(f"Unknown fetch run: {run_id}")
 
-            if update_watermark and current["watermark"] is not None:
+            final_status = status or (
+                "partial_failure" if current["notes_failed"] else "success"
+            )
+
+            if (
+                update_watermark
+                and final_status == "success"
+                and current["watermark"] is not None
+            ):
                 self._set_sync_state_locked("last_watermark", current["watermark"])
 
             self.connection.execute(
@@ -194,7 +202,7 @@ class Database:
                 """,
                 (
                     utc_now_iso(),
-                    status,
+                    final_status,
                     error,
                     run_id,
                 ),

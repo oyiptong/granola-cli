@@ -4,6 +4,7 @@ import pytest
 
 from granola.client import ApiError
 from granola.config import AppConfig
+from granola.db import Database
 from granola_cli import (
     build_parser,
     fetch_updated_after,
@@ -242,3 +243,45 @@ def test_partial_fetch_does_not_advance_watermark(tmp_path, monkeypatch) -> None
     assert db.get_note("not_ok00000000001") is not None
     assert db.get_sync_state("last_watermark") is None
     db.close()
+
+
+def test_fetch_preserves_original_exception_when_finalization_fails(
+    tmp_path, monkeypatch
+) -> None:
+    key_path = tmp_path / "api_key.txt"
+    key_path.write_text("test-key\n", encoding="utf-8")
+    db_path = tmp_path / "granola.sqlite3"
+
+    class FakeClient:
+        def __init__(self, api_key: str, *, api_base_url: str, rate_limiter=None):
+            self.api_key = api_key
+            self.api_base_url = api_base_url
+            self.rate_limiter = rate_limiter
+
+        def iter_note_summaries(
+            self, *, updated_after: str | None, page_size: int
+        ) -> list[dict]:
+            raise RuntimeError("boom")
+
+    original_finish = Database.finish_fetch_run
+
+    def failing_finish(self, run_id: str, **kwargs):
+        if kwargs.get("status") == "failed":
+            raise RuntimeError("finalization failed")
+        return original_finish(self, run_id, **kwargs)
+
+    monkeypatch.setattr("granola_cli.GranolaClient", FakeClient)
+    monkeypatch.setattr("granola_cli.Database.finish_fetch_run", failing_finish)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        main(
+            [
+                "fetch",
+                "--db-path",
+                str(db_path),
+                "--api-key-file",
+                str(key_path),
+                "--api-base-url",
+                "http://127.0.0.1:8765",
+            ]
+        )

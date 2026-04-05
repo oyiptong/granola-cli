@@ -17,6 +17,37 @@ uv run granola_cli.py search "topic"
 uv run granola_cli.py get <note_id> --transcript
 ```
 
+## Installation
+
+If you want to use the tool directly from this repository while developing, run it from the repo root:
+
+```bash
+uv run granola-cli --help
+uv run granola-cli fetch
+```
+
+If you want `granola-cli` available from any directory, install it as a uv tool:
+
+```bash
+uv tool install .
+```
+
+For an editable install that stays linked to your working copy while you keep changing the repo:
+
+```bash
+uv tool install --editable .
+```
+
+After that, you can run the command from anywhere:
+
+```bash
+granola-cli --help
+granola-cli list
+granola-cli search "budget review"
+```
+
+If the command is not found, check uv's tool bin directory with `uv tool dir` and make sure that directory is on your `PATH`.
+
 ## Commands
 
 ### fetch

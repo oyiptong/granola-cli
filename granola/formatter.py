@@ -25,9 +25,16 @@ def json_line(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-def format_error(mode: OutputMode, *, error: str, message: str, retryable: bool, **context: object) -> str:
+def format_error(
+    mode: OutputMode, *, error: str, message: str, retryable: bool, **context: object
+) -> str:
     if mode is OutputMode.JSON:
-        payload = {"error": error, "message": message, "retryable": retryable, **context}
+        payload = {
+            "error": error,
+            "message": message,
+            "retryable": retryable,
+            **context,
+        }
         return json.dumps(payload, ensure_ascii=False)
     return message
 
@@ -48,7 +55,9 @@ def note_to_list_payload(row: dict, *, detailed: bool) -> dict:
                 "attendee_count": len(note.get("attendees") or []),
                 "has_transcript": bool(note.get("transcript")),
                 "summary_word_count": word_count(note.get("summary_text")),
-                "transcript_word_count": word_count(transcript_to_text(note.get("transcript"))),
+                "transcript_word_count": word_count(
+                    transcript_to_text(note.get("transcript"))
+                ),
             }
         )
     return payload
@@ -59,7 +68,9 @@ def format_list_rows(rows: list[dict], *, mode: OutputMode, detailed: bool) -> s
         return "\n".join(row["note_id"] for row in rows)
 
     if mode is OutputMode.JSON:
-        return "\n".join(json_line(note_to_list_payload(row, detailed=detailed)) for row in rows)
+        return "\n".join(
+            json_line(note_to_list_payload(row, detailed=detailed)) for row in rows
+        )
 
     lines: list[str] = []
     for row in rows:

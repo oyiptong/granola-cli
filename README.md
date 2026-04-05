@@ -111,4 +111,10 @@ Run tests with:
 uv run -m pytest
 ```
 
+Run linting with:
+
+```bash
+uv run ruff check .
+```
+
 Use `--log-level DEBUG` for verbose logging during development.

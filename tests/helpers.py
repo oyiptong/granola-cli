@@ -45,7 +45,9 @@ def sample_note(
             {"name": "Oat Benson", "email": "oat@granola.ai"},
             {"name": "Raisin Patel", "email": "raisin@granola.ai"},
         ],
-        "folder_membership": [{"id": "fol_123", "object": "folder", "name": "Top secret recipes"}],
+        "folder_membership": [
+            {"id": "fol_123", "object": "folder", "name": "Top secret recipes"}
+        ],
         "summary_text": summary_text,
         "summary_markdown": "## Summary",
         "transcript": transcript,

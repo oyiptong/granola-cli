@@ -4,7 +4,6 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-
 DEFAULT_API_BASE_URL = "https://public-api.granola.ai"
 
 

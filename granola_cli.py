@@ -6,15 +6,29 @@ import logging
 import sys
 from pathlib import Path
 
-from granola.config import AppConfig, DEFAULT_API_BASE_URL, default_config, load_or_create_config
 from granola.client import ApiError, GranolaClient
+from granola.config import (
+    AppConfig,
+    default_config,
+    load_or_create_config,
+)
 from granola.db import Database
-from granola.export import export_note_files, raw_json_text, summary_text, transcript_text
-from granola.formatter import OutputMode, detect_output_mode, format_error, format_list_rows, format_search_rows
+from granola.export import (
+    export_note_files,
+    raw_json_text,
+    summary_text,
+    transcript_text,
+)
+from granola.formatter import (
+    OutputMode,
+    detect_output_mode,
+    format_error,
+    format_list_rows,
+    format_search_rows,
+)
 from granola.ratelimit import RateLimiter
 from granola.search import SearchEngine
 from granola.util import normalize_user_datetime
-
 
 DEFAULT_API_KEY_FILE = "~/.config/granola/api_key.txt"
 
@@ -22,7 +36,15 @@ logger = logging.getLogger("granola")
 
 
 class CommandError(Exception):
-    def __init__(self, error: str, message: str, *, exit_code: int, retryable: bool, **context: object):
+    def __init__(
+        self,
+        error: str,
+        message: str,
+        *,
+        exit_code: int,
+        retryable: bool,
+        **context: object,
+    ):
         super().__init__(message)
         self.error = error
         self.message = message
@@ -40,31 +62,58 @@ def build_parser(config: AppConfig | None = None) -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    fetch_parser = subparsers.add_parser("fetch", parents=[subcommand_common], help="Sync notes from the API into the local SQLite database")
+    fetch_parser = subparsers.add_parser(
+        "fetch",
+        parents=[subcommand_common],
+        help="Sync notes from the API into the local SQLite database",
+    )
     fetch_parser.add_argument(
         "--overwrite-from",
         help="If ISO date/datetime: re-fetch and overwrite from that updated_at point. If 'all': re-fetch everything.",
     )
-    fetch_parser.add_argument("--dry-run", action="store_true", help="Run discovery only and show what would be fetched")
+    fetch_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run discovery only and show what would be fetched",
+    )
     fetch_parser.add_argument("--api-key-file", default=DEFAULT_API_KEY_FILE)
     fetch_parser.add_argument("--api-base-url", default=config.api_base_url)
     fetch_parser.add_argument("--page-size", type=int, default=30)
 
-    list_parser = subparsers.add_parser("list", parents=[subcommand_common], help="List notes from the local DB by created_at")
+    list_parser = subparsers.add_parser(
+        "list",
+        parents=[subcommand_common],
+        help="List notes from the local DB by created_at",
+    )
     list_parser.add_argument(
         "--date-start",
         help="Inclusive lower bound on note creation date (created_at, UTC). Accepts YYYY-MM-DD or ISO datetime.",
     )
-    list_parser.add_argument("--date-end", help="Inclusive upper bound on note creation date (created_at, UTC).")
+    list_parser.add_argument(
+        "--date-end",
+        help="Inclusive upper bound on note creation date (created_at, UTC).",
+    )
     list_parser.add_argument("--limit", type=int, default=50)
     list_parser.add_argument("--detailed", action="store_true")
 
-    get_parser = subparsers.add_parser("get", parents=[subcommand_common], help="Retrieve one note from the local DB")
+    get_parser = subparsers.add_parser(
+        "get", parents=[subcommand_common], help="Retrieve one note from the local DB"
+    )
     get_parser.add_argument("note_id")
-    get_parser.add_argument("--summary", action="store_true", help="Print the summary text")
-    get_parser.add_argument("--transcript", action="store_true", help="Print the transcript in me:/them: format")
+    get_parser.add_argument(
+        "--summary", action="store_true", help="Print the summary text"
+    )
+    get_parser.add_argument(
+        "--transcript",
+        action="store_true",
+        help="Print the transcript in me:/them: format",
+    )
 
-    search_parser = subparsers.add_parser("search", parents=[subcommand_common], help="Search stored notes by created_at range")
+    search_parser = subparsers.add_parser(
+        "search",
+        parents=[subcommand_common],
+        help="Search stored notes by created_at range",
+    )
     search_parser.add_argument("query")
     search_parser.add_argument(
         "--in",
@@ -72,17 +121,35 @@ def build_parser(config: AppConfig | None = None) -> argparse.ArgumentParser:
         choices=["transcript", "summary"],
         help="Scope search to 'transcript' or 'summary' only. If omitted, searches across title, summary, and transcript.",
     )
-    search_parser.add_argument("--date-start", help="Inclusive lower bound on note creation date (created_at, UTC). Accepts YYYY-MM-DD or ISO datetime.")
-    search_parser.add_argument("--date-end", help="Inclusive upper bound on note creation date (created_at, UTC). Accepts YYYY-MM-DD or ISO datetime.")
+    search_parser.add_argument(
+        "--date-start",
+        help="Inclusive lower bound on note creation date (created_at, UTC). Accepts YYYY-MM-DD or ISO datetime.",
+    )
+    search_parser.add_argument(
+        "--date-end",
+        help="Inclusive upper bound on note creation date (created_at, UTC). Accepts YYYY-MM-DD or ISO datetime.",
+    )
     search_parser.add_argument("--limit", type=int, default=20)
 
-    output_parser = subparsers.add_parser("output", parents=[subcommand_common], help="Bulk-export notes from the local DB by created_at")
-    output_parser.add_argument("--date-start", help="Inclusive lower bound on note creation date (created_at, UTC). Accepts YYYY-MM-DD or ISO datetime.")
-    output_parser.add_argument("--date-end", help="Inclusive upper bound on note creation date (created_at, UTC). Accepts YYYY-MM-DD or ISO datetime.")
+    output_parser = subparsers.add_parser(
+        "output",
+        parents=[subcommand_common],
+        help="Bulk-export notes from the local DB by created_at",
+    )
+    output_parser.add_argument(
+        "--date-start",
+        help="Inclusive lower bound on note creation date (created_at, UTC). Accepts YYYY-MM-DD or ISO datetime.",
+    )
+    output_parser.add_argument(
+        "--date-end",
+        help="Inclusive upper bound on note creation date (created_at, UTC). Accepts YYYY-MM-DD or ISO datetime.",
+    )
     output_parser.add_argument("--note-id", action="append", default=[])
     output_parser.add_argument("--summary", action="store_true")
     output_parser.add_argument("--transcript", action="store_true")
-    output_parser.add_argument("--all", action="store_true", help="Output raw JSON files")
+    output_parser.add_argument(
+        "--all", action="store_true", help="Output raw JSON files"
+    )
     output_parser.add_argument("--artifacts-dir", default="./artifacts")
 
     return parser
@@ -118,7 +185,11 @@ def _common_parser(*, use_defaults: bool, db_path: str) -> argparse.ArgumentPars
 
 
 def configure_logging(level: str) -> None:
-    logging.basicConfig(level=getattr(logging, level), format="%(levelname)s %(message)s", stream=sys.stderr)
+    logging.basicConfig(
+        level=getattr(logging, level),
+        format="%(levelname)s %(message)s",
+        stream=sys.stderr,
+    )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -144,7 +215,13 @@ def read_api_key(path: str) -> str:
             path=path,
         ) from exc
     if not api_key:
-        raise CommandError("auth_failed", f"API key file {path} is empty", exit_code=4, retryable=False, path=path)
+        raise CommandError(
+            "auth_failed",
+            f"API key file {path} is empty",
+            exit_code=4,
+            retryable=False,
+            path=path,
+        )
     return api_key
 
 
@@ -164,15 +241,32 @@ def fetch_updated_after(db: Database, overwrite_from: str | None) -> str | None:
 
 def run_fetch(args: argparse.Namespace, mode: OutputMode) -> int:
     db = open_database(args.db_path)
-    run_id = db.start_fetch_run(overwrite_from=args.overwrite_from, dry_run=args.dry_run)
+    run_id = db.start_fetch_run(
+        overwrite_from=args.overwrite_from, dry_run=args.dry_run
+    )
     try:
         api_key = read_api_key(args.api_key_file)
-        client = GranolaClient(api_key, api_base_url=args.api_base_url, rate_limiter=RateLimiter(database=db))
+        client = GranolaClient(
+            api_key,
+            api_base_url=args.api_base_url,
+            rate_limiter=RateLimiter(database=db),
+        )
         updated_after = fetch_updated_after(db, args.overwrite_from)
-        notes = client.iter_note_summaries(updated_after=updated_after, page_size=min(args.page_size, 30))
+        notes = client.iter_note_summaries(
+            updated_after=updated_after, page_size=min(args.page_size, 30)
+        )
 
         if args.dry_run:
-            rows = [{"note_id": note["id"], "title": note.get("title"), "created_at": note["created_at"], "updated_at": note["updated_at"], "note": note} for note in notes]
+            rows = [
+                {
+                    "note_id": note["id"],
+                    "title": note.get("title"),
+                    "created_at": note["created_at"],
+                    "updated_at": note["updated_at"],
+                    "note": note,
+                }
+                for note in notes
+            ]
             emit_stdout(format_list_rows(rows, mode=mode, detailed=False))
             db.finish_fetch_run(
                 run_id,
@@ -252,7 +346,9 @@ def run_fetch(args: argparse.Namespace, mode: OutputMode) -> int:
 def run_list(args: argparse.Namespace, mode: OutputMode) -> int:
     db = open_database(args.db_path)
     try:
-        rows = db.list_notes(date_start=args.date_start, date_end=args.date_end, limit=args.limit)
+        rows = db.list_notes(
+            date_start=args.date_start, date_end=args.date_end, limit=args.limit
+        )
         emit_stdout(format_list_rows(rows, mode=mode, detailed=args.detailed))
         return 0
     finally:
@@ -303,7 +399,12 @@ def run_search(args: argparse.Namespace, mode: OutputMode) -> int:
             )
         except Exception as exc:
             if "no such table: notes_fts" in str(exc):
-                raise CommandError("usage_error", "FTS index missing. Run fetch first.", exit_code=1, retryable=False) from exc
+                raise CommandError(
+                    "usage_error",
+                    "FTS index missing. Run fetch first.",
+                    exit_code=1,
+                    retryable=False,
+                ) from exc
             raise
         if not rows:
             logger.info("No results found")
@@ -318,9 +419,15 @@ def run_output(args: argparse.Namespace, mode: OutputMode) -> int:
     db = open_database(args.db_path)
     try:
         include_json = args.all or not (args.all or args.summary or args.transcript)
-        include_summary = args.summary or not (args.all or args.summary or args.transcript)
-        include_transcript = args.transcript or not (args.all or args.summary or args.transcript)
-        notes = db.exportable_notes(note_ids=args.note_id, date_start=args.date_start, date_end=args.date_end)
+        include_summary = args.summary or not (
+            args.all or args.summary or args.transcript
+        )
+        include_transcript = args.transcript or not (
+            args.all or args.summary or args.transcript
+        )
+        notes = db.exportable_notes(
+            note_ids=args.note_id, date_start=args.date_start, date_end=args.date_end
+        )
         artifacts_dir = Path(args.artifacts_dir)
         written_paths: list[str] = []
         for note in notes:
@@ -359,15 +466,41 @@ def main(argv: list[str] | None = None) -> int:
             return run_search(args, mode)
         if args.command == "output":
             return run_output(args, mode)
-        raise CommandError("usage_error", f"Unknown command: {args.command}", exit_code=2, retryable=False)
+        raise CommandError(
+            "usage_error",
+            f"Unknown command: {args.command}",
+            exit_code=2,
+            retryable=False,
+        )
     except ApiError as exc:
-        sys.stderr.write(format_error(mode, error=exc.error, message=exc.message, retryable=exc.retryable, **exc.context) + "\n")
+        sys.stderr.write(
+            format_error(
+                mode,
+                error=exc.error,
+                message=exc.message,
+                retryable=exc.retryable,
+                **exc.context,
+            )
+            + "\n"
+        )
         return exc.exit_code
     except CommandError as exc:
-        sys.stderr.write(format_error(mode, error=exc.error, message=exc.message, retryable=exc.retryable, **exc.context) + "\n")
+        sys.stderr.write(
+            format_error(
+                mode,
+                error=exc.error,
+                message=exc.message,
+                retryable=exc.retryable,
+                **exc.context,
+            )
+            + "\n"
+        )
         return exc.exit_code
     except ValueError as exc:
-        sys.stderr.write(format_error(mode, error="usage_error", message=str(exc), retryable=False) + "\n")
+        sys.stderr.write(
+            format_error(mode, error="usage_error", message=str(exc), retryable=False)
+            + "\n"
+        )
         return 2
 
 

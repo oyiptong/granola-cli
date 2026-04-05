@@ -5,7 +5,12 @@ from datetime import datetime, timezone
 
 
 def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def parse_iso_datetime(value: str) -> datetime:
@@ -28,7 +33,12 @@ def normalize_user_datetime(value: str, *, is_end: bool) -> str:
         suffix = "23:59:59Z" if is_end else "00:00:00Z"
         return f"{text}T{suffix}"
 
-    return parse_iso_datetime(text).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return (
+        parse_iso_datetime(text)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def slugify_title(title: str | None) -> str:

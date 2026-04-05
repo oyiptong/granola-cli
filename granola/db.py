@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import time
 import uuid
 from pathlib import Path
 
 from granola.util import normalize_user_datetime, transcript_to_text, utc_now_iso
-
 
 SCHEMA_VERSION = "2"
 
@@ -111,7 +109,9 @@ class Database:
         )
 
     def get_sync_state(self, key: str) -> str | None:
-        row = self.connection.execute("SELECT value FROM sync_state WHERE key = ?", (key,)).fetchone()
+        row = self.connection.execute(
+            "SELECT value FROM sync_state WHERE key = ?", (key,)
+        ).fetchone()
         return None if row is None else row["value"]
 
     def start_fetch_run(self, *, overwrite_from: str | None, dry_run: bool) -> str:
@@ -145,7 +145,16 @@ class Database:
                     notes_failed = ?, watermark = ?, error = ?
                 WHERE run_id = ?
                 """,
-                (utc_now_iso(), status, notes_discovered, notes_fetched, notes_failed, watermark, error, run_id),
+                (
+                    utc_now_iso(),
+                    status,
+                    notes_discovered,
+                    notes_fetched,
+                    notes_failed,
+                    watermark,
+                    error,
+                    run_id,
+                ),
             )
 
     def record_request_log(
@@ -164,7 +173,15 @@ class Database:
                 INSERT INTO request_log(created_at, method, path, status, status_code, error, retry_after_seconds)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (utc_now_iso(), method, path, status, status_code, error, retry_after_seconds),
+                (
+                    utc_now_iso(),
+                    method,
+                    path,
+                    status,
+                    status_code,
+                    error,
+                    retry_after_seconds,
+                ),
             )
 
     def acquire_rate_limit_slot(
@@ -179,7 +196,9 @@ class Database:
         try:
             cursor.execute("BEGIN IMMEDIATE")
             cutoff = now - window_seconds
-            cursor.execute("DELETE FROM rate_limit_events WHERE requested_at <= ?", (cutoff,))
+            cursor.execute(
+                "DELETE FROM rate_limit_events WHERE requested_at <= ?", (cutoff,)
+            )
             rows = cursor.execute(
                 "SELECT requested_at FROM rate_limit_events ORDER BY requested_at ASC"
             ).fetchall()
@@ -191,7 +210,9 @@ class Database:
                 delays.append(max(0.0, window_seconds - (now - timestamps[0])))
             delay = max(delays)
             if delay == 0.0:
-                cursor.execute("INSERT INTO rate_limit_events(requested_at) VALUES (?)", (now,))
+                cursor.execute(
+                    "INSERT INTO rate_limit_events(requested_at) VALUES (?)", (now,)
+                )
                 self.connection.commit()
                 return 0.0
             self.connection.rollback()
@@ -203,10 +224,14 @@ class Database:
             cursor.close()
 
     def request_log_rows(self) -> list[sqlite3.Row]:
-        return self.connection.execute("SELECT * FROM request_log ORDER BY id ASC").fetchall()
+        return self.connection.execute(
+            "SELECT * FROM request_log ORDER BY id ASC"
+        ).fetchall()
 
     def fetch_run(self, run_id: str) -> sqlite3.Row | None:
-        return self.connection.execute("SELECT * FROM fetch_runs WHERE run_id = ?", (run_id,)).fetchone()
+        return self.connection.execute(
+            "SELECT * FROM fetch_runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
 
     def upsert_note(self, note: dict) -> None:
         owner = note.get("owner") or {}
@@ -247,7 +272,9 @@ class Database:
                     fetched_at,
                 ),
             )
-            self.connection.execute("DELETE FROM transcript_entries WHERE note_id = ?", (note["id"],))
+            self.connection.execute(
+                "DELETE FROM transcript_entries WHERE note_id = ?", (note["id"],)
+            )
             self.connection.executemany(
                 """
                 INSERT INTO transcript_entries(note_id, entry_index, speaker_source, text, start_time, end_time)
@@ -290,10 +317,14 @@ class Database:
             )
 
     def get_note(self, note_id: str) -> dict | None:
-        row = self.connection.execute("SELECT raw_json FROM notes WHERE note_id = ?", (note_id,)).fetchone()
+        row = self.connection.execute(
+            "SELECT raw_json FROM notes WHERE note_id = ?", (note_id,)
+        ).fetchone()
         return None if row is None else json.loads(row["raw_json"])
 
-    def list_notes(self, *, date_start: str | None, date_end: str | None, limit: int) -> list[dict]:
+    def list_notes(
+        self, *, date_start: str | None, date_end: str | None, limit: int
+    ) -> list[dict]:
         conditions: list[str] = []
         params: list[object] = []
         if date_start:
@@ -308,7 +339,9 @@ class Database:
         rows = self.connection.execute(query, params).fetchall()
         return [self._note_row_payload(row) for row in rows]
 
-    def exportable_notes(self, *, note_ids: list[str], date_start: str | None, date_end: str | None) -> list[dict]:
+    def exportable_notes(
+        self, *, note_ids: list[str], date_start: str | None, date_end: str | None
+    ) -> list[dict]:
         conditions: list[str] = []
         params: list[object] = []
         if note_ids:
@@ -322,7 +355,9 @@ class Database:
             conditions.append("created_at <= ?")
             params.append(normalize_user_datetime(date_end, is_end=True))
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        rows = self.connection.execute(f"SELECT raw_json FROM notes {where} ORDER BY created_at DESC", params).fetchall()
+        rows = self.connection.execute(
+            f"SELECT raw_json FROM notes {where} ORDER BY created_at DESC", params
+        ).fetchall()
         return [json.loads(row["raw_json"]) for row in rows]
 
     def _note_row_payload(self, row: sqlite3.Row) -> dict:

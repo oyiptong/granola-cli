@@ -18,7 +18,9 @@ class SearchEngine:
         date_end: str | None,
         limit: int,
     ) -> list[dict]:
-        match_query = query if scope is None else f"{self._scope_column(scope)} : {query}"
+        match_query = (
+            query if scope is None else f"{self._scope_column(scope)} : {query}"
+        )
         snippet_column = {None: -1, "summary": 2, "transcript": 3}[scope]
 
         conditions = ["notes_fts MATCH ?"]
@@ -41,7 +43,7 @@ class SearchEngine:
                 bm25(notes_fts) AS rank
             FROM notes_fts
             JOIN notes n ON n.note_id = notes_fts.note_id
-            WHERE {' AND '.join(conditions)}
+            WHERE {" AND ".join(conditions)}
             ORDER BY rank
             LIMIT ?
             """,

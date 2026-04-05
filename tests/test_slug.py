@@ -2,7 +2,10 @@ from granola.util import slugify_title
 
 
 def test_slugify_normal_title() -> None:
-    assert slugify_title("Quarterly yoghurt budget review") == "quarterly-yoghurt-budget-review"
+    assert (
+        slugify_title("Quarterly yoghurt budget review")
+        == "quarterly-yoghurt-budget-review"
+    )
 
 
 def test_slugify_special_characters_and_unicode() -> None:

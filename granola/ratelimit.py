@@ -78,7 +78,7 @@ class RateLimiter:
                 if delay == 0.0:
                     return
                 self.sleep(delay)
-            
+
         delay = self.compute_delay()
         if delay > 0:
             self.sleep(delay)
@@ -90,7 +90,14 @@ class RateLimiter:
         self._prune(timestamp)
         self.timestamps.append(timestamp)
 
-    def execute(self, operation: Callable[[], requests.Response], *, max_retries: int = 5, method: str = "GET", path: str = "") -> requests.Response:
+    def execute(
+        self,
+        operation: Callable[[], requests.Response],
+        *,
+        max_retries: int = 5,
+        method: str = "GET",
+        path: str = "",
+    ) -> requests.Response:
         last_retry_after: float | None = None
 
         for attempt in range(max_retries + 1):
@@ -101,11 +108,25 @@ class RateLimiter:
             except requests.RequestException as exc:
                 if attempt == max_retries:
                     if self.database is not None:
-                        self.database.record_request_log(method=method, path=path, status="network_error", error=str(exc))
+                        self.database.record_request_log(
+                            method=method,
+                            path=path,
+                            status="network_error",
+                            error=str(exc),
+                        )
                     raise exc
-                logger.warning("retrying after network error: attempt=%s error=%s", attempt + 1, exc)
+                logger.warning(
+                    "retrying after network error: attempt=%s error=%s",
+                    attempt + 1,
+                    exc,
+                )
                 if self.database is not None:
-                    self.database.record_request_log(method=method, path=path, status="retry_network_error", error=str(exc))
+                    self.database.record_request_log(
+                        method=method,
+                        path=path,
+                        status="retry_network_error",
+                        error=str(exc),
+                    )
                 self.sleep(self._backoff_seconds(attempt))
                 continue
 
@@ -114,33 +135,72 @@ class RateLimiter:
                 last_retry_after = retry_after
                 if attempt == max_retries:
                     if self.database is not None:
-                        self.database.record_request_log(method=method, path=path, status="rate_limited", status_code=429, retry_after_seconds=retry_after)
+                        self.database.record_request_log(
+                            method=method,
+                            path=path,
+                            status="rate_limited",
+                            status_code=429,
+                            retry_after_seconds=retry_after,
+                        )
                     raise RateLimitExhaustedError(retry_after)
-                logger.warning("retrying after 429 response: attempt=%s retry_after=%s", attempt + 1, retry_after)
+                logger.warning(
+                    "retrying after 429 response: attempt=%s retry_after=%s",
+                    attempt + 1,
+                    retry_after,
+                )
                 if self.database is not None:
-                    self.database.record_request_log(method=method, path=path, status="retry_429", status_code=429, retry_after_seconds=retry_after)
-                self.sleep(retry_after if retry_after is not None else self._backoff_seconds(attempt))
+                    self.database.record_request_log(
+                        method=method,
+                        path=path,
+                        status="retry_429",
+                        status_code=429,
+                        retry_after_seconds=retry_after,
+                    )
+                self.sleep(
+                    retry_after
+                    if retry_after is not None
+                    else self._backoff_seconds(attempt)
+                )
                 continue
 
             if 500 <= response.status_code < 600:
                 if attempt == max_retries:
                     if self.database is not None:
-                        self.database.record_request_log(method=method, path=path, status="server_error", status_code=response.status_code)
+                        self.database.record_request_log(
+                            method=method,
+                            path=path,
+                            status="server_error",
+                            status_code=response.status_code,
+                        )
                     raise TransientHttpError(response.status_code)
-                logger.warning("retrying after server error: attempt=%s status=%s", attempt + 1, response.status_code)
+                logger.warning(
+                    "retrying after server error: attempt=%s status=%s",
+                    attempt + 1,
+                    response.status_code,
+                )
                 if self.database is not None:
-                    self.database.record_request_log(method=method, path=path, status="retry_5xx", status_code=response.status_code)
+                    self.database.record_request_log(
+                        method=method,
+                        path=path,
+                        status="retry_5xx",
+                        status_code=response.status_code,
+                    )
                 self.sleep(self._backoff_seconds(attempt))
                 continue
 
             if self.database is not None:
-                self.database.record_request_log(method=method, path=path, status="success", status_code=response.status_code)
+                self.database.record_request_log(
+                    method=method,
+                    path=path,
+                    status="success",
+                    status_code=response.status_code,
+                )
             return response
 
         raise RateLimitExhaustedError(last_retry_after)
 
     def _backoff_seconds(self, attempt: int) -> float:
-        base = min(2 ** attempt, 16)
+        base = min(2**attempt, 16)
         return base + self.jitter(0.0, 0.25)
 
 

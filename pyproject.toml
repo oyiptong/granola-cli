@@ -27,6 +27,10 @@ granola-cli = "granola_cli:main"
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+py-modules = ["granola_cli"]
+packages = ["granola"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

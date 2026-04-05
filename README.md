@@ -118,6 +118,14 @@ Use `--json` to force JSON/JSONL and `--quiet` for bare values such as note IDs 
 
 `fetch` uses the Granola list endpoint for note discovery and then fetches each note with transcript data for canonical storage. Incremental sync uses an `updated_at` watermark stored in SQLite so edits to older notes are captured. Local commands filter by `created_at`, while search uses an FTS5 index rebuilt after fetch runs.
 
+## People and transcript limitations
+
+The local archive can contain information about multiple people within a note corpus. Stored note content includes owner metadata, attendees, calendar event metadata, and transcript entries, so person-related information is present in the raw data.
+
+What the CLI does **not** currently provide is a first-class person query surface. There is no dedicated command or filter for querying notes by a specific individual such as owner, attendee, or speaker. Person-related access is currently indirect through raw note JSON, detailed list output, and full-text search.
+
+Granola transcript handling also has an important limitation: the CLI does not currently expose full diarization by named individual speaker. Transcript export and display collapse speaker labels to `me:` when the source is `microphone` and `them:` for everything else. In practice, that means transcripts distinguish the local microphone from non-microphone speech, but they do not identify every speaker by person name.
+
 ## Exit codes
 
 | Code | Meaning |

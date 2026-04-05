@@ -255,6 +255,7 @@ def run_fetch(args: argparse.Namespace, mode: OutputMode) -> int:
         notes = client.iter_note_summaries(
             updated_after=updated_after, page_size=min(args.page_size, 30)
         )
+        db.set_fetch_discovered(run_id, len(notes))
 
         if args.dry_run:
             rows = [
@@ -271,72 +272,61 @@ def run_fetch(args: argparse.Namespace, mode: OutputMode) -> int:
             db.finish_fetch_run(
                 run_id,
                 status="dry_run",
-                notes_discovered=len(notes),
-                notes_fetched=0,
-                notes_failed=0,
-                watermark=db.get_sync_state("last_watermark"),
             )
             return 0
 
-        fetched = 0
-        failed = 0
-        max_updated_at: str | None = None
         for note_summary in notes:
             note_id = note_summary["id"]
             try:
                 note = client.get_note(note_id)
-                db.upsert_note(note)
-                fetched += 1
-                if max_updated_at is None or note["updated_at"] > max_updated_at:
-                    max_updated_at = note["updated_at"]
+                db.record_fetch_success(run_id, note)
             except ApiError as exc:
-                failed += 1
+                db.record_fetch_failure(run_id)
                 logger.warning("failed to fetch %s: %s", note_id, exc.message)
 
-        db.rebuild_fts()
+        current_run = db.fetch_run(run_id)
+        if current_run is None:
+            raise CommandError(
+                "database_error",
+                f"Fetch run {run_id} disappeared before finalization",
+                exit_code=1,
+                retryable=False,
+            )
+
+        run_row = db.finish_fetch_run(
+            run_id,
+            status="partial_failure" if current_run["notes_failed"] else "success",
+            rebuild_fts=True,
+            update_watermark=current_run["notes_failed"] == 0,
+        )
         watermark = db.get_sync_state("last_watermark")
-        if failed == 0 and max_updated_at is not None:
-            db.set_sync_state("last_watermark", max_updated_at)
-            db.connection.commit()
-            watermark = max_updated_at
 
         logger.info(
             "fetch complete: discovered=%s fetched=%s failed=%s watermark=%s",
-            len(notes),
-            fetched,
-            failed,
+            run_row["notes_discovered"],
+            run_row["notes_fetched"],
+            run_row["notes_failed"],
             watermark,
         )
         if mode is OutputMode.JSON:
             emit_stdout(
                 json.dumps(
                     {
-                        "notes_discovered": len(notes),
-                        "notes_fetched": fetched,
-                        "notes_failed": failed,
+                        "notes_discovered": run_row["notes_discovered"],
+                        "notes_fetched": run_row["notes_fetched"],
+                        "notes_failed": run_row["notes_failed"],
                         "watermark": watermark,
                     },
                     ensure_ascii=False,
                 )
             )
-        db.finish_fetch_run(
-            run_id,
-            status="partial_failure" if failed else "success",
-            notes_discovered=len(notes),
-            notes_fetched=fetched,
-            notes_failed=failed,
-            watermark=watermark,
-        )
-        return 6 if failed else 0
+        return 6 if run_row["notes_failed"] else 0
     except Exception as exc:
         db.finish_fetch_run(
             run_id,
             status="failed",
-            notes_discovered=0,
-            notes_fetched=0,
-            notes_failed=0,
-            watermark=db.get_sync_state("last_watermark"),
             error=str(exc),
+            rebuild_fts=True,
         )
         raise
     finally:

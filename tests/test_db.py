@@ -1,3 +1,5 @@
+import pytest
+
 from granola.db import Database
 from tests.helpers import sample_note
 
@@ -68,18 +70,23 @@ def test_fetch_run_round_trip() -> None:
     db = Database(":memory:")
     db.initialize()
     run_id = db.start_fetch_run(overwrite_from=None, dry_run=False)
+    db.set_fetch_discovered(run_id, 1)
+    db.record_fetch_success(
+        run_id,
+        sample_note(updated_at="2026-01-01T00:00:00Z"),
+    )
     db.finish_fetch_run(
         run_id,
         status="success",
-        notes_discovered=1,
-        notes_fetched=1,
-        notes_failed=0,
-        watermark="2026-01-01T00:00:00Z",
+        rebuild_fts=True,
+        update_watermark=True,
     )
     row = db.fetch_run(run_id)
     assert row is not None
     assert row["status"] == "success"
     assert row["notes_fetched"] == 1
+    assert row["watermark"] == "2026-01-01T00:00:00Z"
+    assert db.get_sync_state("last_watermark") == "2026-01-01T00:00:00Z"
 
 
 def test_request_log_round_trip() -> None:
@@ -113,3 +120,51 @@ def test_shared_rate_limit_slot_uses_same_db_file(tmp_path) -> None:
     )
     first.close()
     second.close()
+
+
+def test_record_fetch_success_updates_note_and_bookkeeping_together() -> None:
+    db = Database(":memory:")
+    db.initialize()
+    run_id = db.start_fetch_run(overwrite_from=None, dry_run=False)
+    db.set_fetch_discovered(run_id, 1)
+
+    db.record_fetch_success(
+        run_id,
+        sample_note(
+            note_id="not_txn0000000001",
+            updated_at="2026-02-01T00:00:00Z",
+        ),
+    )
+
+    row = db.fetch_run(run_id)
+    assert row is not None
+    assert db.get_note("not_txn0000000001") is not None
+    assert row["notes_fetched"] == 1
+    assert row["watermark"] == "2026-02-01T00:00:00Z"
+
+
+def test_record_fetch_success_rolls_back_when_run_is_missing() -> None:
+    db = Database(":memory:")
+    db.initialize()
+
+    with pytest.raises(ValueError, match="Unknown fetch run"):
+        db.record_fetch_success(
+            "missing-run",
+            sample_note(
+                note_id="not_missing000001",
+                updated_at="2026-02-01T00:00:00Z",
+            ),
+        )
+
+    assert db.get_note("not_missing000001") is None
+
+
+def test_fetch_run_mutators_raise_when_run_is_missing() -> None:
+    db = Database(":memory:")
+    db.initialize()
+
+    with pytest.raises(ValueError, match="Unknown fetch run"):
+        db.set_fetch_discovered("missing-run", 1)
+
+    with pytest.raises(ValueError, match="Unknown fetch run"):
+        db.record_fetch_failure("missing-run")

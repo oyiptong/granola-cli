@@ -100,9 +100,13 @@ class Database:
                 );
                 """
             )
-            self.set_sync_state("schema_version", SCHEMA_VERSION)
+            self._set_sync_state_locked("schema_version", SCHEMA_VERSION)
 
     def set_sync_state(self, key: str, value: str) -> None:
+        with self.connection:
+            self._set_sync_state_locked(key, value)
+
+    def _set_sync_state_locked(self, key: str, value: str) -> None:
         self.connection.execute(
             "INSERT INTO sync_state(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (key, value),
@@ -126,36 +130,82 @@ class Database:
             )
         return run_id
 
+    def set_fetch_discovered(self, run_id: str, notes_discovered: int) -> None:
+        with self.connection:
+            cursor = self.connection.execute(
+                "UPDATE fetch_runs SET notes_discovered = ? WHERE run_id = ?",
+                (notes_discovered, run_id),
+            )
+            _require_single_row(cursor, run_id)
+
+    def record_fetch_success(self, run_id: str, note: dict) -> None:
+        with self.connection:
+            self._upsert_note_locked(note)
+            cursor = self.connection.execute(
+                """
+                UPDATE fetch_runs
+                SET notes_fetched = notes_fetched + 1,
+                    watermark = CASE
+                        WHEN watermark IS NULL OR watermark < ? THEN ?
+                        ELSE watermark
+                    END
+                WHERE run_id = ?
+                """,
+                (note["updated_at"], note["updated_at"], run_id),
+            )
+            _require_single_row(cursor, run_id)
+
+    def record_fetch_failure(self, run_id: str) -> None:
+        with self.connection:
+            cursor = self.connection.execute(
+                "UPDATE fetch_runs SET notes_failed = notes_failed + 1 WHERE run_id = ?",
+                (run_id,),
+            )
+            _require_single_row(cursor, run_id)
+
     def finish_fetch_run(
         self,
         run_id: str,
         *,
         status: str,
-        notes_discovered: int,
-        notes_fetched: int,
-        notes_failed: int,
-        watermark: str | None,
         error: str | None = None,
-    ) -> None:
+        rebuild_fts: bool = False,
+        update_watermark: bool = False,
+    ) -> sqlite3.Row:
         with self.connection:
+            if rebuild_fts:
+                self._rebuild_fts_locked()
+
+            current = self.connection.execute(
+                "SELECT notes_discovered, notes_fetched, notes_failed, watermark FROM fetch_runs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if current is None:
+                raise ValueError(f"Unknown fetch run: {run_id}")
+
+            if update_watermark and current["watermark"] is not None:
+                self._set_sync_state_locked("last_watermark", current["watermark"])
+
             self.connection.execute(
                 """
                 UPDATE fetch_runs
-                SET finished_at = ?, status = ?, notes_discovered = ?, notes_fetched = ?,
-                    notes_failed = ?, watermark = ?, error = ?
+                SET finished_at = ?, status = ?, error = ?
                 WHERE run_id = ?
                 """,
                 (
                     utc_now_iso(),
                     status,
-                    notes_discovered,
-                    notes_fetched,
-                    notes_failed,
-                    watermark,
                     error,
                     run_id,
                 ),
             )
+            result = self.connection.execute(
+                "SELECT * FROM fetch_runs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if result is None:
+                raise ValueError(f"Unknown fetch run: {run_id}")
+            return result
 
     def record_request_log(
         self,
@@ -234,87 +284,93 @@ class Database:
         ).fetchone()
 
     def upsert_note(self, note: dict) -> None:
+        with self.connection:
+            self._upsert_note_locked(note)
+
+    def _upsert_note_locked(self, note: dict) -> None:
         owner = note.get("owner") or {}
         transcript = note.get("transcript") or []
         raw_json = json.dumps(note, ensure_ascii=False, sort_keys=True)
         fetched_at = utc_now_iso()
 
-        with self.connection:
-            self.connection.execute(
-                """
-                INSERT INTO notes(
-                    note_id, object_type, title, owner_name, owner_email, created_at, updated_at,
-                    summary_text, summary_markdown, raw_json, fetched_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(note_id) DO UPDATE SET
-                    object_type = excluded.object_type,
-                    title = excluded.title,
-                    owner_name = excluded.owner_name,
-                    owner_email = excluded.owner_email,
-                    created_at = excluded.created_at,
-                    updated_at = excluded.updated_at,
-                    summary_text = excluded.summary_text,
-                    summary_markdown = excluded.summary_markdown,
-                    raw_json = excluded.raw_json,
-                    fetched_at = excluded.fetched_at
-                """,
+        self.connection.execute(
+            """
+            INSERT INTO notes(
+                note_id, object_type, title, owner_name, owner_email, created_at, updated_at,
+                summary_text, summary_markdown, raw_json, fetched_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(note_id) DO UPDATE SET
+                object_type = excluded.object_type,
+                title = excluded.title,
+                owner_name = excluded.owner_name,
+                owner_email = excluded.owner_email,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at,
+                summary_text = excluded.summary_text,
+                summary_markdown = excluded.summary_markdown,
+                raw_json = excluded.raw_json,
+                fetched_at = excluded.fetched_at
+            """,
+            (
+                note["id"],
+                note["object"],
+                note.get("title"),
+                owner.get("name"),
+                owner.get("email"),
+                note["created_at"],
+                note["updated_at"],
+                note.get("summary_text"),
+                note.get("summary_markdown"),
+                raw_json,
+                fetched_at,
+            ),
+        )
+        self.connection.execute(
+            "DELETE FROM transcript_entries WHERE note_id = ?", (note["id"],)
+        )
+        self.connection.executemany(
+            """
+            INSERT INTO transcript_entries(note_id, entry_index, speaker_source, text, start_time, end_time)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
                 (
                     note["id"],
-                    note["object"],
-                    note.get("title"),
-                    owner.get("name"),
-                    owner.get("email"),
-                    note["created_at"],
-                    note["updated_at"],
-                    note.get("summary_text"),
-                    note.get("summary_markdown"),
-                    raw_json,
-                    fetched_at,
-                ),
-            )
-            self.connection.execute(
-                "DELETE FROM transcript_entries WHERE note_id = ?", (note["id"],)
-            )
-            self.connection.executemany(
-                """
-                INSERT INTO transcript_entries(note_id, entry_index, speaker_source, text, start_time, end_time)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        note["id"],
-                        index,
-                        (entry.get("speaker") or {}).get("source"),
-                        entry.get("text", ""),
-                        entry.get("start_time"),
-                        entry.get("end_time"),
-                    )
-                    for index, entry in enumerate(transcript)
-                ],
-            )
+                    index,
+                    (entry.get("speaker") or {}).get("source"),
+                    entry.get("text", ""),
+                    entry.get("start_time"),
+                    entry.get("end_time"),
+                )
+                for index, entry in enumerate(transcript)
+            ],
+        )
 
     def rebuild_fts(self) -> None:
         with self.connection:
-            self.connection.execute("DELETE FROM notes_fts")
-            self.connection.execute(
-                """
-                INSERT INTO notes_fts (note_id, title, summary_text, transcript_text)
-                SELECT
-                    n.note_id,
-                    COALESCE(n.title, ''),
-                    COALESCE(n.summary_text, ''),
-                    COALESCE(
-                        (
-                            SELECT GROUP_CONCAT(te.text, char(10))
-                            FROM transcript_entries te
-                            WHERE te.note_id = n.note_id
-                            ORDER BY te.entry_index
-                        ),
-                        ''
-                    )
-                FROM notes n
-                """
-            )
+            self._rebuild_fts_locked()
+
+    def _rebuild_fts_locked(self) -> None:
+        self.connection.execute("DELETE FROM notes_fts")
+        self.connection.execute(
+            """
+            INSERT INTO notes_fts (note_id, title, summary_text, transcript_text)
+            SELECT
+                n.note_id,
+                COALESCE(n.title, ''),
+                COALESCE(n.summary_text, ''),
+                COALESCE(
+                    (
+                        SELECT GROUP_CONCAT(te.text, char(10))
+                        FROM transcript_entries te
+                        WHERE te.note_id = n.note_id
+                        ORDER BY te.entry_index
+                    ),
+                    ''
+                )
+            FROM notes n
+            """
+        )
 
     def get_note(self, note_id: str) -> dict | None:
         row = self.connection.execute(
@@ -373,3 +429,8 @@ class Database:
             "note": note,
             "transcript_text": transcript_to_text(note.get("transcript")),
         }
+
+
+def _require_single_row(cursor: sqlite3.Cursor, run_id: str) -> None:
+    if cursor.rowcount != 1:
+        raise ValueError(f"Unknown fetch run: {run_id}")

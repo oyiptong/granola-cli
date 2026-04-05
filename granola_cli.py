@@ -6,17 +6,17 @@ import logging
 import sys
 from pathlib import Path
 
+from granola.config import AppConfig, DEFAULT_API_BASE_URL, default_config, load_or_create_config
 from granola.client import ApiError, GranolaClient
 from granola.db import Database
 from granola.export import export_note_files, raw_json_text, summary_text, transcript_text
 from granola.formatter import OutputMode, detect_output_mode, format_error, format_list_rows, format_search_rows
+from granola.ratelimit import RateLimiter
 from granola.search import SearchEngine
 from granola.util import normalize_user_datetime
 
 
-DEFAULT_DB_PATH = "./granola.sqlite3"
 DEFAULT_API_KEY_FILE = "~/.config/granola/api_key.txt"
-DEFAULT_API_BASE_URL = "https://public-api.granola.ai"
 
 logger = logging.getLogger("granola")
 
@@ -31,9 +31,10 @@ class CommandError(Exception):
         self.context = context
 
 
-def build_parser() -> argparse.ArgumentParser:
-    root_common = _common_parser(use_defaults=True)
-    subcommand_common = _common_parser(use_defaults=False)
+def build_parser(config: AppConfig | None = None) -> argparse.ArgumentParser:
+    config = config or default_config()
+    root_common = _common_parser(use_defaults=True, db_path=config.db_path)
+    subcommand_common = _common_parser(use_defaults=False, db_path=config.db_path)
 
     parser = argparse.ArgumentParser(description="Granola CLI", parents=[root_common])
 
@@ -46,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fetch_parser.add_argument("--dry-run", action="store_true", help="Run discovery only and show what would be fetched")
     fetch_parser.add_argument("--api-key-file", default=DEFAULT_API_KEY_FILE)
-    fetch_parser.add_argument("--api-base-url", default=DEFAULT_API_BASE_URL)
+    fetch_parser.add_argument("--api-base-url", default=config.api_base_url)
     fetch_parser.add_argument("--page-size", type=int, default=30)
 
     list_parser = subparsers.add_parser("list", parents=[subcommand_common], help="List notes from the local DB by created_at")
@@ -87,12 +88,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _common_parser(*, use_defaults: bool) -> argparse.ArgumentParser:
+def _common_parser(*, use_defaults: bool, db_path: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument(
         "--db-path",
-        default=DEFAULT_DB_PATH if use_defaults else argparse.SUPPRESS,
-        help="Override SQLite file (default: ./granola.sqlite3)",
+        default=db_path if use_defaults else argparse.SUPPRESS,
+        help=f"Override SQLite file (default: {db_path})",
     )
     parser.add_argument(
         "--log-level",
@@ -121,7 +122,7 @@ def configure_logging(level: str) -> None:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    return build_parser().parse_args(argv)
+    return build_parser(load_or_create_config()).parse_args(argv)
 
 
 def emit_stdout(text: str) -> None:
@@ -163,15 +164,24 @@ def fetch_updated_after(db: Database, overwrite_from: str | None) -> str | None:
 
 def run_fetch(args: argparse.Namespace, mode: OutputMode) -> int:
     db = open_database(args.db_path)
+    run_id = db.start_fetch_run(overwrite_from=args.overwrite_from, dry_run=args.dry_run)
     try:
         api_key = read_api_key(args.api_key_file)
-        client = GranolaClient(api_key, api_base_url=args.api_base_url)
+        client = GranolaClient(api_key, api_base_url=args.api_base_url, rate_limiter=RateLimiter(database=db))
         updated_after = fetch_updated_after(db, args.overwrite_from)
         notes = client.iter_note_summaries(updated_after=updated_after, page_size=min(args.page_size, 30))
 
         if args.dry_run:
             rows = [{"note_id": note["id"], "title": note.get("title"), "created_at": note["created_at"], "updated_at": note["updated_at"], "note": note} for note in notes]
             emit_stdout(format_list_rows(rows, mode=mode, detailed=False))
+            db.finish_fetch_run(
+                run_id,
+                status="dry_run",
+                notes_discovered=len(notes),
+                notes_fetched=0,
+                notes_failed=0,
+                watermark=db.get_sync_state("last_watermark"),
+            )
             return 0
 
         fetched = 0
@@ -215,7 +225,26 @@ def run_fetch(args: argparse.Namespace, mode: OutputMode) -> int:
                     ensure_ascii=False,
                 )
             )
+        db.finish_fetch_run(
+            run_id,
+            status="partial_failure" if failed else "success",
+            notes_discovered=len(notes),
+            notes_fetched=fetched,
+            notes_failed=failed,
+            watermark=watermark,
+        )
         return 6 if failed else 0
+    except Exception as exc:
+        db.finish_fetch_run(
+            run_id,
+            status="failed",
+            notes_discovered=0,
+            notes_fetched=0,
+            notes_failed=0,
+            watermark=db.get_sync_state("last_watermark"),
+            error=str(exc),
+        )
+        raise
     finally:
         db.close()
 

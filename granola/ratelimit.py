@@ -5,8 +5,12 @@ import random
 import time
 from collections import deque
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import requests
+
+if TYPE_CHECKING:
+    from granola.db import Database
 
 
 logger = logging.getLogger("granola.ratelimit")
@@ -33,14 +37,18 @@ class RateLimiter:
         sustained_rate_per_second: float = 5.0,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
+        wall_time: Callable[[], float] = time.time,
         jitter: Callable[[float, float], float] = random.uniform,
+        database: Database | None = None,
     ):
         self.burst_capacity = burst_capacity
         self.window_seconds = window_seconds
         self.min_interval = 1.0 / sustained_rate_per_second
         self.sleep = sleep
         self.monotonic = monotonic
+        self.wall_time = wall_time
         self.jitter = jitter
+        self.database = database
         self.timestamps: deque[float] = deque()
 
     def _prune(self, now: float) -> None:
@@ -59,16 +67,30 @@ class RateLimiter:
         return max(delays)
 
     def wait_for_slot(self) -> None:
+        if self.database is not None:
+            while True:
+                delay = self.database.acquire_rate_limit_slot(
+                    now=self.wall_time(),
+                    burst_capacity=self.burst_capacity,
+                    window_seconds=self.window_seconds,
+                    min_interval=self.min_interval,
+                )
+                if delay == 0.0:
+                    return
+                self.sleep(delay)
+            
         delay = self.compute_delay()
         if delay > 0:
             self.sleep(delay)
 
     def record_request(self, *, now: float | None = None) -> None:
+        if self.database is not None:
+            return
         timestamp = self.monotonic() if now is None else now
         self._prune(timestamp)
         self.timestamps.append(timestamp)
 
-    def execute(self, operation: Callable[[], requests.Response], *, max_retries: int = 5) -> requests.Response:
+    def execute(self, operation: Callable[[], requests.Response], *, max_retries: int = 5, method: str = "GET", path: str = "") -> requests.Response:
         last_retry_after: float | None = None
 
         for attempt in range(max_retries + 1):
@@ -78,8 +100,12 @@ class RateLimiter:
                 response = operation()
             except requests.RequestException as exc:
                 if attempt == max_retries:
+                    if self.database is not None:
+                        self.database.record_request_log(method=method, path=path, status="network_error", error=str(exc))
                     raise exc
                 logger.warning("retrying after network error: attempt=%s error=%s", attempt + 1, exc)
+                if self.database is not None:
+                    self.database.record_request_log(method=method, path=path, status="retry_network_error", error=str(exc))
                 self.sleep(self._backoff_seconds(attempt))
                 continue
 
@@ -87,18 +113,28 @@ class RateLimiter:
                 retry_after = _retry_after_seconds(response.headers.get("Retry-After"))
                 last_retry_after = retry_after
                 if attempt == max_retries:
+                    if self.database is not None:
+                        self.database.record_request_log(method=method, path=path, status="rate_limited", status_code=429, retry_after_seconds=retry_after)
                     raise RateLimitExhaustedError(retry_after)
                 logger.warning("retrying after 429 response: attempt=%s retry_after=%s", attempt + 1, retry_after)
+                if self.database is not None:
+                    self.database.record_request_log(method=method, path=path, status="retry_429", status_code=429, retry_after_seconds=retry_after)
                 self.sleep(retry_after if retry_after is not None else self._backoff_seconds(attempt))
                 continue
 
             if 500 <= response.status_code < 600:
                 if attempt == max_retries:
+                    if self.database is not None:
+                        self.database.record_request_log(method=method, path=path, status="server_error", status_code=response.status_code)
                     raise TransientHttpError(response.status_code)
                 logger.warning("retrying after server error: attempt=%s status=%s", attempt + 1, response.status_code)
+                if self.database is not None:
+                    self.database.record_request_log(method=method, path=path, status="retry_5xx", status_code=response.status_code)
                 self.sleep(self._backoff_seconds(attempt))
                 continue
 
+            if self.database is not None:
+                self.database.record_request_log(method=method, path=path, status="success", status_code=response.status_code)
             return response
 
         raise RateLimitExhaustedError(last_retry_after)

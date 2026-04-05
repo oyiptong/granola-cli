@@ -2,18 +2,19 @@ import pytest
 from unittest.mock import patch
 
 from granola.client import ApiError
-from granola_cli import build_parser, fetch_updated_after, main, open_database
+from granola.config import AppConfig
+from granola_cli import build_parser, fetch_updated_after, main, open_database, parse_args
 from tests.helpers import sample_note
 
 
 def test_json_and_quiet_are_mutually_exclusive() -> None:
-    parser = build_parser()
+    parser = build_parser(AppConfig(api_base_url="https://public-api.granola.ai", db_path="./granola.sqlite3"))
     with pytest.raises(SystemExit):
         parser.parse_args(["--json", "--quiet", "list"])
 
 
 def test_list_defaults_and_overrides() -> None:
-    parser = build_parser()
+    parser = build_parser(AppConfig(api_base_url="https://public-api.granola.ai", db_path="./granola.sqlite3"))
     args = parser.parse_args(["list", "--limit", "5", "--date-start", "2026-01-01"])
     assert args.command == "list"
     assert args.limit == 5
@@ -21,7 +22,7 @@ def test_list_defaults_and_overrides() -> None:
 
 
 def test_global_flags_work_before_and_after_subcommand() -> None:
-    parser = build_parser()
+    parser = build_parser(AppConfig(api_base_url="https://public-api.granola.ai", db_path="./granola.sqlite3"))
     before = parser.parse_args(["--db-path", "/tmp/before.sqlite3", "list", "--json"])
     after = parser.parse_args(["list", "--db-path", "/tmp/after.sqlite3", "--json"])
     assert before.db_path == "/tmp/before.sqlite3"
@@ -37,21 +38,33 @@ def test_overwrite_from_all_is_distinct(tmp_path) -> None:
 
 
 def test_search_scope_parsing() -> None:
-    parser = build_parser()
+    parser = build_parser(AppConfig(api_base_url="https://public-api.granola.ai", db_path="./granola.sqlite3"))
     args = parser.parse_args(["search", "yoghurt", "--in", "transcript"])
     assert args.scope == "transcript"
 
 
 def test_get_requires_note_id() -> None:
-    parser = build_parser()
+    parser = build_parser(AppConfig(api_base_url="https://public-api.granola.ai", db_path="./granola.sqlite3"))
     with pytest.raises(SystemExit):
         parser.parse_args(["get"])
 
 
 def test_output_note_id_repeatable() -> None:
-    parser = build_parser()
+    parser = build_parser(AppConfig(api_base_url="https://public-api.granola.ai", db_path="./granola.sqlite3"))
     args = parser.parse_args(["output", "--note-id", "n1", "--note-id", "n2"])
     assert args.note_id == ["n1", "n2"]
+
+
+def test_parse_args_uses_config_defaults(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_dir = tmp_path / ".config" / "granola"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text(
+        'api_base_url = "http://localhost:9999"\ndb_path = "/tmp/from-config.sqlite3"\n',
+        encoding="utf-8",
+    )
+    args = parse_args(["list"])
+    assert args.db_path == "/tmp/from-config.sqlite3"
 
 
 def test_get_summary_overrides_non_tty_json_default(tmp_path, capsys) -> None:
@@ -117,9 +130,10 @@ def test_partial_fetch_does_not_advance_watermark(tmp_path, monkeypatch) -> None
     db_path = tmp_path / "granola.sqlite3"
 
     class FakeClient:
-        def __init__(self, api_key: str, *, api_base_url: str):
+        def __init__(self, api_key: str, *, api_base_url: str, rate_limiter=None):
             self.api_key = api_key
             self.api_base_url = api_base_url
+            self.rate_limiter = rate_limiter
 
         def iter_note_summaries(self, *, updated_after: str | None, page_size: int) -> list[dict]:
             return [

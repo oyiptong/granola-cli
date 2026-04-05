@@ -101,7 +101,7 @@ Use `--json` to force JSON/JSONL and `--quiet` for bare values such as note IDs 
 
 ## Configuration
 
-The default API key path is `~/.config/granola/api_key.txt`. You can override the API base URL with `--api-base-url` and the SQLite database path with `--db-path`. Personal and Enterprise API keys both work; they only differ in which notes are visible.
+The default API key path is `~/.config/granola/api_key.txt`. Runtime config is stored in `~/.config/granola/config.toml`, which provides `api_base_url` and `db_path`. By default the database path is `~/.local/share/granola-cli/granola-cli.sqlite3`, and the parent directory is created automatically on startup. You can still override the API base URL with `--api-base-url` and the SQLite database path with `--db-path`. Personal and Enterprise API keys both work; they only differ in which notes are visible.
 
 ## Development
 

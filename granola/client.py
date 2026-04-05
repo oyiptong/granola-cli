@@ -54,7 +54,7 @@ class GranolaClient:
             return self.session.request(method, url, params=params, timeout=30)
 
         try:
-            response = self.rate_limiter.execute(operation)
+            response = self.rate_limiter.execute(operation, method=method, path=path)
         except RateLimitExhaustedError as exc:
             raise ApiError(
                 "rate_limited",

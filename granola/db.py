@@ -2,20 +2,30 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
+import uuid
 from pathlib import Path
 
 from granola.util import normalize_user_datetime, transcript_to_text, utc_now_iso
 
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 
 class Database:
     def __init__(self, path: str):
-        self.path = path
-        self.connection = sqlite3.connect(path)
+        if path != ":memory:":
+            expanded = Path(path).expanduser()
+            expanded.parent.mkdir(parents=True, exist_ok=True)
+            self.path = str(expanded)
+        else:
+            self.path = path
+        self.connection = sqlite3.connect(self.path, timeout=30)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
+        self.connection.execute("PRAGMA busy_timeout = 30000")
+        if self.path != ":memory:":
+            self.connection.execute("PRAGMA journal_mode = WAL")
 
     def close(self) -> None:
         self.connection.close()
@@ -53,6 +63,36 @@ class Database:
                     value TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS fetch_runs (
+                    run_id TEXT PRIMARY KEY,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT NULL,
+                    status TEXT NOT NULL,
+                    overwrite_from TEXT NULL,
+                    dry_run INTEGER NOT NULL,
+                    notes_discovered INTEGER NOT NULL DEFAULT 0,
+                    notes_fetched INTEGER NOT NULL DEFAULT 0,
+                    notes_failed INTEGER NOT NULL DEFAULT 0,
+                    watermark TEXT NULL,
+                    error TEXT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS request_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    method TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    status_code INTEGER NULL,
+                    error TEXT NULL,
+                    retry_after_seconds REAL NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS rate_limit_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    requested_at REAL NOT NULL
+                );
+
                 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
                     note_id UNINDEXED,
                     title,
@@ -73,6 +113,100 @@ class Database:
     def get_sync_state(self, key: str) -> str | None:
         row = self.connection.execute("SELECT value FROM sync_state WHERE key = ?", (key,)).fetchone()
         return None if row is None else row["value"]
+
+    def start_fetch_run(self, *, overwrite_from: str | None, dry_run: bool) -> str:
+        run_id = str(uuid.uuid4())
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO fetch_runs(run_id, started_at, status, overwrite_from, dry_run)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (run_id, utc_now_iso(), "running", overwrite_from, 1 if dry_run else 0),
+            )
+        return run_id
+
+    def finish_fetch_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        notes_discovered: int,
+        notes_fetched: int,
+        notes_failed: int,
+        watermark: str | None,
+        error: str | None = None,
+    ) -> None:
+        with self.connection:
+            self.connection.execute(
+                """
+                UPDATE fetch_runs
+                SET finished_at = ?, status = ?, notes_discovered = ?, notes_fetched = ?,
+                    notes_failed = ?, watermark = ?, error = ?
+                WHERE run_id = ?
+                """,
+                (utc_now_iso(), status, notes_discovered, notes_fetched, notes_failed, watermark, error, run_id),
+            )
+
+    def record_request_log(
+        self,
+        *,
+        method: str,
+        path: str,
+        status: str,
+        status_code: int | None = None,
+        error: str | None = None,
+        retry_after_seconds: float | None = None,
+    ) -> None:
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO request_log(created_at, method, path, status, status_code, error, retry_after_seconds)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (utc_now_iso(), method, path, status, status_code, error, retry_after_seconds),
+            )
+
+    def acquire_rate_limit_slot(
+        self,
+        *,
+        now: float,
+        burst_capacity: int,
+        window_seconds: float,
+        min_interval: float,
+    ) -> float:
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute("BEGIN IMMEDIATE")
+            cutoff = now - window_seconds
+            cursor.execute("DELETE FROM rate_limit_events WHERE requested_at <= ?", (cutoff,))
+            rows = cursor.execute(
+                "SELECT requested_at FROM rate_limit_events ORDER BY requested_at ASC"
+            ).fetchall()
+            timestamps = [row[0] for row in rows]
+            delays = [0.0]
+            if timestamps:
+                delays.append(max(0.0, min_interval - (now - timestamps[-1])))
+            if len(timestamps) >= burst_capacity:
+                delays.append(max(0.0, window_seconds - (now - timestamps[0])))
+            delay = max(delays)
+            if delay == 0.0:
+                cursor.execute("INSERT INTO rate_limit_events(requested_at) VALUES (?)", (now,))
+                self.connection.commit()
+                return 0.0
+            self.connection.rollback()
+            return delay
+        except Exception:
+            self.connection.rollback()
+            raise
+        finally:
+            cursor.close()
+
+    def request_log_rows(self) -> list[sqlite3.Row]:
+        return self.connection.execute("SELECT * FROM request_log ORDER BY id ASC").fetchall()
+
+    def fetch_run(self, run_id: str) -> sqlite3.Row | None:
+        return self.connection.execute("SELECT * FROM fetch_runs WHERE run_id = ?", (run_id,)).fetchone()
 
     def upsert_note(self, note: dict) -> None:
         owner = note.get("owner") or {}

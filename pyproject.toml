@@ -1,0 +1,29 @@
+[project]
+name = "granola-cli"
+version = "0.1.0"
+description = "CLI tool for downloading, searching, and exporting Granola notes"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+
+[tool.uv]
+dev-dependencies = [
+  "pytest>=8.0.0",
+]
+
+[project.scripts]
+granola-cli = "granola_cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

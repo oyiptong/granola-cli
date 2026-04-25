@@ -185,3 +185,60 @@ def test_fetch_run_mutators_raise_when_run_is_missing() -> None:
 
     with pytest.raises(ValueError, match="Unknown fetch run"):
         db.record_fetch_failure("missing-run")
+
+
+def test_status_summary_empty_db() -> None:
+    db = Database(":memory:")
+    db.initialize()
+
+    summary = db.status_summary()
+
+    assert summary == {
+        "db_path": ":memory:",
+        "notes": {
+            "count": 0,
+            "earliest_created": None,
+            "latest_created": None,
+            "last_synced_at": None,
+            "watermark": None,
+        },
+        "fts_index": "empty",
+    }
+
+
+def test_status_summary_populated_db(tmp_path) -> None:
+    db = Database(str(tmp_path / "granola.sqlite3"))
+    db.initialize()
+    db.upsert_note(
+        sample_note(note_id="not_old0000000001", created_at="2026-01-01T12:00:00Z")
+    )
+    db.upsert_note(
+        sample_note(note_id="not_new0000000002", created_at="2026-01-27T12:00:00Z")
+    )
+    run_id = db.start_fetch_run(overwrite_from=None, dry_run=False)
+    db.set_fetch_discovered(run_id, 2)
+    db.record_fetch_success(
+        run_id,
+        sample_note(note_id="not_new0000000002", updated_at="2026-01-28T00:00:00Z"),
+    )
+    db.finish_fetch_run(run_id, status="success", rebuild_fts=True, update_watermark=True)
+
+    summary = db.status_summary()
+
+    assert summary["notes"]["count"] == 2
+    assert summary["notes"]["earliest_created"] == "2026-01-01"
+    assert summary["notes"]["latest_created"] == "2026-01-27"
+    assert summary["notes"]["last_synced_at"] is not None
+    assert summary["notes"]["watermark"] == "2026-01-28T00:00:00Z"
+    assert summary["fts_index"] == "current"
+    db.close()
+
+
+def test_status_summary_stale_fts() -> None:
+    db = Database(":memory:")
+    db.initialize()
+    db.upsert_note(sample_note())
+
+    summary = db.status_summary()
+
+    assert summary["fts_index"] == "stale"

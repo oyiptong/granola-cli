@@ -291,6 +291,51 @@ class Database:
             "SELECT * FROM fetch_runs WHERE run_id = ?", (run_id,)
         ).fetchone()
 
+    def status_summary(self) -> dict:
+        note_stats = self.connection.execute(
+            """
+            SELECT
+                COUNT(*) AS count,
+                MIN(substr(created_at, 1, 10)) AS earliest_created,
+                MAX(substr(created_at, 1, 10)) AS latest_created
+            FROM notes
+            """
+        ).fetchone()
+        if note_stats is None:
+            raise ValueError("Unable to read note status")
+
+        last_synced_row = self.connection.execute(
+            """
+            SELECT finished_at
+            FROM fetch_runs
+            WHERE status = 'success'
+            ORDER BY finished_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        watermark = self.get_sync_state("last_watermark")
+        fts_count = self.connection.execute("SELECT COUNT(*) FROM notes_fts").fetchone()[0]
+        note_count = int(note_stats["count"])
+
+        if note_count == 0:
+            fts_index = "empty"
+        elif fts_count == note_count:
+            fts_index = "current"
+        else:
+            fts_index = "stale"
+
+        return {
+            "db_path": self.path,
+            "notes": {
+                "count": note_count,
+                "earliest_created": note_stats["earliest_created"],
+                "latest_created": note_stats["latest_created"],
+                "last_synced_at": None if last_synced_row is None else last_synced_row["finished_at"],
+                "watermark": watermark,
+            },
+            "fts_index": fts_index,
+        }
+
     def upsert_note(self, note: dict) -> None:
         with self.connection:
             self._upsert_note_locked(note)

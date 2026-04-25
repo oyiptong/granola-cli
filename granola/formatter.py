@@ -4,7 +4,7 @@ import json
 import sys
 from enum import Enum
 
-from granola.util import transcript_to_text, word_count
+from granola.util import parse_iso_datetime, transcript_to_text, word_count
 
 
 class OutputMode(str, Enum):
@@ -109,3 +109,33 @@ def format_search_rows(rows: list[dict], *, mode: OutputMode) -> str:
         header = f"{row['created_at'][:10]}  {row.get('title') or 'Untitled'}  {row['note_id']}"
         blocks.append(f"{header}\n  {row['snippet']}")
     return "\n\n".join(blocks)
+
+
+def format_status(payload: dict, *, mode: OutputMode) -> str:
+    if mode is OutputMode.JSON:
+        return json.dumps(payload, ensure_ascii=False)
+
+    notes = payload["notes"]
+    count = notes["count"]
+    if count == 0:
+        notes_line = "Notes: 0"
+    else:
+        notes_line = (
+            f"Notes: {count} ({notes['earliest_created']} → {notes['latest_created']})"
+        )
+
+    last_synced_at = notes["last_synced_at"]
+    if last_synced_at is None:
+        last_synced_line = "Last synced: never"
+    else:
+        dt = parse_iso_datetime(last_synced_at)
+        last_synced_line = f"Last synced: {dt.strftime('%Y-%m-%d %H:%M UTC')}"
+
+    return "\n".join(
+        [
+            f"DB: {payload['db_path']}",
+            notes_line,
+            last_synced_line,
+            f"FTS index: {payload['fts_index']}",
+        ]
+    )

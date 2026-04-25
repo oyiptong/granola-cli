@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from granola.formatter import (
     format_error,
     format_list_rows,
     format_search_rows,
+    format_status,
 )
 from granola.ratelimit import RateLimiter
 from granola.search import SearchEngine
@@ -151,6 +153,12 @@ def build_parser(config: AppConfig | None = None) -> argparse.ArgumentParser:
         "--all", action="store_true", help="Output raw JSON files"
     )
     output_parser.add_argument("--artifacts-dir", default="./artifacts")
+
+    subparsers.add_parser(
+        "status",
+        parents=[subcommand_common],
+        help="Show local database and sync status",
+    )
 
     return parser
 
@@ -433,6 +441,33 @@ def run_output(args: argparse.Namespace, mode: OutputMode) -> int:
         db.close()
 
 
+def run_status(args: argparse.Namespace, mode: OutputMode) -> int:
+    try:
+        db = open_database(args.db_path)
+    except sqlite3.Error as exc:
+        raise CommandError(
+            "database_error",
+            f"Unable to open local database: {exc}",
+            exit_code=1,
+            retryable=False,
+            db_path=args.db_path,
+        ) from exc
+
+    try:
+        emit_stdout(format_status(db.status_summary(), mode=mode))
+        return 0
+    except sqlite3.Error as exc:
+        raise CommandError(
+            "database_error",
+            f"Unable to read local database status: {exc}",
+            exit_code=1,
+            retryable=False,
+            db_path=args.db_path,
+        ) from exc
+    finally:
+        db.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     configure_logging(args.log_level)
@@ -449,6 +484,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_search(args, mode)
         if args.command == "output":
             return run_output(args, mode)
+        if args.command == "status":
+            return run_status(args, mode)
         raise CommandError(
             "usage_error",
             f"Unknown command: {args.command}",

@@ -100,6 +100,17 @@ Important flags: `--note-id`, `--date-start`, `--date-end`, `--summary`, `--tran
 uv run granola_cli.py output --all --summary --transcript
 ```
 
+### status
+
+Show local database and sync status without contacting the API.
+
+This is especially useful when you want to confirm which database file is active, how many notes are stored locally, whether incremental sync has completed successfully, and whether the local FTS index is ready before running agent or shell workflows.
+
+```bash
+uv run granola_cli.py status
+uv run granola_cli.py status --json
+```
+
 Run `--help` on any subcommand for details.
 
 ## Agent usage

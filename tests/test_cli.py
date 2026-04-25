@@ -87,6 +87,16 @@ def test_output_note_id_repeatable() -> None:
     assert args.note_id == ["n1", "n2"]
 
 
+def test_status_command_parsing() -> None:
+    parser = build_parser(
+        AppConfig(
+            api_base_url="https://public-api.granola.ai", db_path="./granola.sqlite3"
+        )
+    )
+    args = parser.parse_args(["status"])
+    assert args.command == "status"
+
+
 def test_parse_args_uses_config_defaults(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     config_dir = tmp_path / ".config" / "granola"
@@ -285,3 +295,48 @@ def test_fetch_preserves_original_exception_when_finalization_fails(
                 "http://127.0.0.1:8765",
             ]
         )
+
+
+def test_status_defaults_to_json_when_not_tty(tmp_path, capsys) -> None:
+    db = open_database(str(tmp_path / "granola.sqlite3"))
+    db.close()
+
+    with patch("sys.stdout.isatty", return_value=False):
+        result = main(["status", "--db-path", str(tmp_path / "granola.sqlite3")])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert '"db_path":' in captured.out
+    assert '"fts_index": "empty"' in captured.out
+
+
+def test_status_human_output(tmp_path, capsys) -> None:
+    db = open_database(str(tmp_path / "granola.sqlite3"))
+    db.upsert_note(sample_note(created_at="2026-01-27T15:30:00Z"))
+    run_id = db.start_fetch_run(overwrite_from=None, dry_run=False)
+    db.set_fetch_discovered(run_id, 1)
+    db.record_fetch_success(
+        run_id, sample_note(updated_at="2026-01-27T16:45:00Z")
+    )
+    db.finish_fetch_run(run_id, status="success", rebuild_fts=True, update_watermark=True)
+    db.close()
+
+    with patch("sys.stdout.isatty", return_value=True):
+        result = main(["status", "--db-path", str(tmp_path / "granola.sqlite3")])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "DB: " in captured.out
+    assert "Notes: 1 (2026-01-27 → 2026-01-27)" in captured.out
+    assert "FTS index: current" in captured.out
+
+
+def test_status_unreadable_db_returns_nonzero(tmp_path, capsys) -> None:
+    db_path = tmp_path / "missing" / "blocked.sqlite3"
+
+    with patch("granola_cli.open_database", side_effect=__import__("sqlite3").OperationalError("unable to open database file")):
+        result = main(["status", "--db-path", str(db_path), "--json"])
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert '"error": "database_error"' in captured.err
